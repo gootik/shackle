@@ -27,9 +27,22 @@ shackle_backlog_infinity_test_() ->
         fun (_) -> cleanup_tcp() end,
     [fun add_tcp_subtest/0]}.
 
+shackle_random_ssl_test_() ->
+    {setup,
+        fun () -> setup_ssl([
+            {pool_size, 1},
+            {pool_strategy, random}
+        ]) end,
+        fun (_) -> cleanup_ssl() end,
+    {inparallel, [
+        fun add_ssl_subtest/0,
+        fun multiply_ssl_subtest/0
+    ]}}.
+
 shackle_random_tcp_test_() ->
     {setup,
         fun () -> setup_tcp([
+            {pool_size, 1},
             {pool_strategy, random}
         ]) end,
         fun (_) -> cleanup_tcp() end,
@@ -41,6 +54,7 @@ shackle_random_tcp_test_() ->
 shackle_random_udp_test_() ->
     {setup,
         fun () -> setup_udp([
+            {pool_size, 1},
             {pool_strategy, random}
         ]) end,
         fun (_) -> cleanup_udp() end,
@@ -101,6 +115,9 @@ shackle_round_robin_udp_test_() ->
     ]}}.
 
 %% tests
+add_ssl_subtest() ->
+    [assert_random_add(?CLIENT_SSL) || _ <- lists:seq(1, ?N)].
+
 add_tcp_subtest() ->
     [assert_random_add(?CLIENT_TCP) || _ <- lists:seq(1, ?N)].
 
@@ -118,6 +135,9 @@ backlog_full_subtest() ->
         ({error, backlog_full}) -> true;
         (_) -> false
     end, receive_loop(20))).
+
+multiply_ssl_subtest() ->
+    [assert_random_multiply(?CLIENT_SSL) || _ <- lists:seq(1, ?N)].
 
 multiply_tcp_subtest() ->
     [assert_random_multiply(?CLIENT_TCP) || _ <- lists:seq(1, ?N)].
@@ -163,6 +183,11 @@ assert_random_multiply(Client) ->
 cleanup() ->
     shackle_app:stop().
 
+cleanup_ssl() ->
+    arithmetic_ssl_client:stop(),
+    arithmetic_ssl_server:stop(),
+    cleanup().
+
 cleanup_tcp() ->
     arithmetic_tcp_client:stop(),
     arithmetic_tcp_server:stop(),
@@ -188,11 +213,25 @@ setup() ->
     error_logger:tty(false),
     shackle_app:start().
 
+setup_ssl(Options) ->
+    setup(),
+    arithmetic_ssl_server:start(),
+    shackle_pool:start(?POOL_NAME, ?CLIENT_SSL, [
+        {port, ?PORT},
+        {protocol, shackle_ssl},
+        {reconnect, true},
+        {socket_options, [
+            binary,
+            {packet, raw}
+        ]}
+    ], Options).
+
 setup_tcp(Options) ->
     setup(),
     arithmetic_tcp_server:start(),
     shackle_pool:start(?POOL_NAME, ?CLIENT_TCP, [
         {port, ?PORT},
+        {protocol, shackle_tcp},
         {reconnect, true},
         {socket_options, [
             binary,

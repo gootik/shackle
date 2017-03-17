@@ -1,4 +1,4 @@
--module(shackle_tcp_server).
+-module(shackle_ssl_server).
 -include("shackle_internal.hrl").
 
 -compile(inline).
@@ -20,7 +20,7 @@
     port             :: inet:port_number(),
     reconnect_state  :: undefined | reconnect_state(),
     socket           :: undefined | inet:socket(),
-    socket_options   :: [gen_tcp:connect_option()],
+    socket_options   :: [ssl:connect_option()],
     timer_ref        :: undefined | reference()
 }).
 
@@ -82,7 +82,7 @@ handle_msg(#cast {
     {ok, ExtRequestId, Data, ClientState2} =
         Client:handle_request(Request, ClientState),
 
-    case gen_tcp:send(Socket, Data) of
+    case ssl:send(Socket, Data) of
         ok ->
             Msg = {timeout, ExtRequestId},
             TimerRef = erlang:send_after(Timeout, self(), Msg),
@@ -90,26 +90,17 @@ handle_msg(#cast {
             {ok, {State, ClientState2}};
         {error, Reason} ->
             shackle_utils:warning_msg(PoolName, "send error: ~p", [Reason]),
-            gen_tcp:close(Socket),
+            ssl:close(Socket),
             close(State, ClientState2)
     end;
-handle_msg({tcp, _Socket, Data}, {#state {
+handle_msg({ssl, _Socket, Data}, {#state {
         client = Client,
-        name = Name,
-        pool_name = PoolName,
-        socket = Socket
+        name = Name
     } = State, ClientState}) ->
 
-    case Client:handle_data(Data, ClientState) of
-        {ok, Replies, ClientState2} ->
-            shackle_utils:process_responses(Replies, Name),
-            {ok, [State, ClientState2]};
-        {error, Reason, ClientState2} ->
-            shackle_utils:warning_msg(PoolName,
-                "handle_data error: ~p", [Reason]),
-            gen_tcp:close(Socket),
-            close(State, ClientState2)
-    end;
+    {ok, Replies, ClientState2} = Client:handle_data(Data, ClientState),
+    shackle_utils:process_responses(Replies, Name),
+    {ok, {State, ClientState2}};
 handle_msg({timeout, ExtRequestId}, {#state {
         name = Name
     } = State, ClientState}) ->
@@ -121,20 +112,20 @@ handle_msg({timeout, ExtRequestId}, {#state {
             ok
     end,
     {ok, {State, ClientState}};
-handle_msg({tcp_closed, Socket}, {#state {
+handle_msg({ssl_closed, Socket}, {#state {
         socket = Socket,
         pool_name = PoolName
     } = State, ClientState}) ->
 
     shackle_utils:warning_msg(PoolName, "connection closed", []),
     close(State, ClientState);
-handle_msg({tcp_error, Socket, Reason}, {#state {
+handle_msg({ssl_error, Socket, Reason}, {#state {
         socket = Socket,
         pool_name = PoolName
     } = State, ClientState}) ->
 
     shackle_utils:warning_msg(PoolName, "connection error: ~p", [Reason]),
-    gen_tcp:close(Socket),
+    ssl:close(Socket),
     close(State, ClientState);
 handle_msg(?MSG_CONNECT, {#state {
         client = Client,
@@ -147,7 +138,7 @@ handle_msg(?MSG_CONNECT, {#state {
 
     case connect(PoolName, Ip, Port, SocketOptions) of
         {ok, Socket} ->
-            case shackle_utils:client_setup(Client, PoolName, Socket) of
+            case client_setup(Client, PoolName, Socket) of
                 {ok, ClientState2} ->
                     ReconnectState2 =
                         shackle_utils:reconnect_state_reset(ReconnectState),
@@ -157,8 +148,8 @@ handle_msg(?MSG_CONNECT, {#state {
                         socket = Socket
                     }, ClientState2}};
                 {error, _Reason, ClientState2} ->
-                    gen_tcp:close(Socket),
-                    close(State, ClientState2)
+                    ssl:close(Socket),
+                    reconnect(State, ClientState2)
             end;
         {error, _Reason} ->
             reconnect(State, ClientState)
@@ -180,6 +171,19 @@ terminate(_Reason, {#state {
     ok.
 
 %% private
+client_setup(Client, PoolName, Socket) ->
+    {ok, ClientState} = Client:init(),
+    ssl:setopts(Socket, [{active, false}]),
+    case Client:setup(Socket, ClientState) of
+        {ok, ClientState2} ->
+            ssl:setopts(Socket, [{active, true}]),
+            {ok, ClientState2};
+        {error, Reason, ClientState2} ->
+            shackle_utils:warning_msg(PoolName,
+                "setup error: ~p", [Reason]),
+            {error, Reason, ClientState2}
+    end.
+
 close(#state {name = Name} = State, ClientState) ->
     shackle_utils:reply_all(Name, {error, socket_closed}),
     reconnect(State, ClientState).
@@ -188,8 +192,8 @@ connect(PoolName, Ip, Port, SocketOptions) ->
     case inet:getaddrs(Ip, inet) of
         {ok, Addrs} ->
             Ip2 = shackle_utils:random_element(Addrs),
-            case gen_tcp:connect(Ip2, Port, SocketOptions,
-                ?DEFAULT_CONNECT_TIMEOUT) of
+            case ssl:connect(Ip2, Port, SocketOptions,
+                    ?DEFAULT_CONNECT_TIMEOUT) of
                 {ok, Socket} ->
                     {ok, Socket};
                 {error, Reason} ->
