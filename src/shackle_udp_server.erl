@@ -110,7 +110,7 @@ handle_msg({udp, _Socket, _Ip, _InPortNo, Data}, {#state {
     case Client:handle_data(Data, ClientState) of
         {ok, Replies, ClientState2} ->
             shackle_utils:process_responses(Replies, Name),
-            {ok, [State, ClientState2]};
+            {ok, {State, ClientState2}};
         {error, Reason, ClientState2} ->
             shackle_utils:warning_msg(PoolName,
                 "handle_data error: ~p", [Reason]),

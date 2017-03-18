@@ -95,12 +95,21 @@ handle_msg(#cast {
     end;
 handle_msg({ssl, _Socket, Data}, {#state {
         client = Client,
-        name = Name
+        name = Name,
+        pool_name = PoolName,
+        socket = Socket
     } = State, ClientState}) ->
 
-    {ok, Replies, ClientState2} = Client:handle_data(Data, ClientState),
-    shackle_utils:process_responses(Replies, Name),
-    {ok, {State, ClientState2}};
+    case Client:handle_data(Data, ClientState) of
+        {ok, Replies, ClientState2} ->
+            shackle_utils:process_responses(Replies, Name),
+            {ok, {State, ClientState2}};
+        {error, Reason, ClientState2} ->
+            shackle_utils:warning_msg(PoolName,
+                "handle_data error: ~p", [Reason]),
+            ssl:close(Socket),
+            close(State, ClientState2)
+    end;
 handle_msg({timeout, ExtRequestId}, {#state {
         name = Name
     } = State, ClientState}) ->
@@ -149,7 +158,7 @@ handle_msg(?MSG_CONNECT, {#state {
                     }, ClientState2}};
                 {error, _Reason, ClientState2} ->
                     ssl:close(Socket),
-                    reconnect(State, ClientState2)
+                    close(State, ClientState2)
             end;
         {error, _Reason} ->
             reconnect(State, ClientState)
