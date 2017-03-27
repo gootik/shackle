@@ -56,16 +56,17 @@ lookup(Key, List, Default) ->
 -spec process_responses([response()], server_name()) ->
     ok.
 
-process_responses(Responses, Name) ->
-    lists:foreach(fun ({ExtRequestId, Reply}) ->
-        case shackle_queue:remove(Name, ExtRequestId) of
-            {ok, Cast, TimerRef} ->
-                erlang:cancel_timer(TimerRef),
-                reply(Name, Reply, Cast);
-            {error, not_found} ->
-                ok
-        end
-    end, Responses).
+process_responses([], _Name) ->
+    ok;
+process_responses([{ExtRequestId, Reply} | T], Name) ->
+    case shackle_queue:remove(Name, ExtRequestId) of
+        {ok, Cast, TimerRef} ->
+            erlang:cancel_timer(TimerRef),
+            reply(Name, Reply, Cast);
+        {error, not_found} ->
+            ok
+    end,
+    process_responses(T, Name).
 
 -spec random(pos_integer()) ->
     non_neg_integer().
